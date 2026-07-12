@@ -6,8 +6,10 @@
  * buffer over the ATLAS_NOTIFY service binding, hands them to the local
  * Ollama on SPECULAR-CORE through an Access-gated tunnel hostname, and
  * posts Ramone's three-to-five sentence account to a dedicated Discord
- * webhook. It never writes to the ring buffer on the happy path, so a
- * digest can never appear in the next day's digest.
+ * webhook, then hands the paragraph to Home Assistant so the room can
+ * speak it through Ramone's normal TTS path. It never writes to the ring
+ * buffer on the happy path, so a digest can never appear in the next
+ * day's digest.
  *
  * Failure discipline: if the feed or the model is unreachable, the
  * Worker posts a one-line notice saying the digest could not be written
@@ -64,7 +66,7 @@ const META = {
   name: "atlas-daily-digest",
   description:
     "Yesterday on the estate as one spoken paragraph, posted every morning in Ramone's voice",
-  version: "1.0.0",
+  version: "1.1.0",
   endpoints: [
     {
       method: "GET",
@@ -94,7 +96,7 @@ export default {
     }
 
     // Manual trigger for testing and backfills. Same pipeline as the
-    // cron, so a successful /run is proof the 07:00 run will work.
+    // cron, so a successful /run is proof the 12:00 run will work.
     if (request.method === "POST" && url.pathname.endsWith("/run")) {
       if (!timingSafeEqual(bearerToken(request), env.DIGEST_RUN_TOKEN)) {
         return json(401, { ok: false, error: "invalid or missing bearer token" });
@@ -165,11 +167,22 @@ async function runDigest(env, day) {
     return { ok: false, day, stage: "webhook", error: reason };
   }
 
+  let spoken = "skipped";
+  try {
+    spoken = await postHomeAssistantDigest(env, day, paragraph);
+  } catch (err) {
+    const reason = `Home Assistant voice webhook rejected the digest (${describe(err)})`;
+    console.error(`digest ${day}: ${reason}`);
+    await emitFailureEvent(env, day, "voice", reason);
+    spoken = "failed";
+  }
+
   return {
     ok: true,
     day,
     events: events.list.length,
     truncated: events.truncated,
+    spoken,
     preview: paragraph.slice(0, 280),
   };
 }
@@ -306,7 +319,7 @@ async function synthesise(env, day, events) {
     headers["CF-Access-Client-Secret"] = env.CF_ACCESS_CLIENT_SECRET;
   }
 
-  // 120s covers a cold model load from NVMe at 07:00 plus generation.
+  // 120s covers a cold model load from NVMe at noon plus generation.
   // Single attempt on purpose: a retry after a timeout would double the
   // wait without changing the outcome, and the fallback path is cheap.
   const res = await fetch(`${env.OLLAMA_URL}/api/chat`, {
@@ -431,6 +444,22 @@ async function postDigest(env, day, paragraph) {
       },
     ],
   });
+}
+
+async function postHomeAssistantDigest(env, day, paragraph) {
+  if (!env.HA_DIGEST_WEBHOOK_URL) return "skipped";
+  const res = await fetch(env.HA_DIGEST_WEBHOOK_URL, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      source: "atlas-daily-digest",
+      day,
+      paragraph,
+    }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return "posted";
 }
 
 /**

@@ -17,10 +17,10 @@
 ![Voice](https://img.shields.io/badge/voice-llama3.1:8b-aaa9a0?style=flat-square&labelColor=0a0a0f)
 ![Plan](https://img.shields.io/badge/plan-workers_plus-aaa9a0?style=flat-square&labelColor=0a0a0f)
 
-A scheduled Worker that reads yesterday's estate activity from [`atlas-notify`](https://github.com/AtlasReaper311/atlas-notify)'s ring buffer, hands it to the local Ollama on SPECULAR-CORE, and posts a three-to-five sentence account in Ramone's voice to its own Discord channel. Not a dashboard and not an event list; the point is a human-shaped answer to "what happened while I slept", and an honest one-line notice on the mornings that answer cannot be written.
+A scheduled Worker that reads yesterday's estate activity from [`atlas-notify`](https://github.com/AtlasReaper311/atlas-notify)'s ring buffer, hands it to the local Ollama on SPECULAR-CORE, posts a three-to-five sentence account in Ramone's voice to its own Discord channel, then asks Home Assistant to speak the same paragraph in the room. Not a dashboard and not an event list; the point is a human-shaped answer to "what happened while I slept", and an honest one-line notice on the days that answer cannot be written.
 
 ```
-cron 07:00 UTC ─▶ atlas-daily-digest (this worker)
+cron 12:00 UTC ─▶ atlas-daily-digest (this worker)
                        │
                        │  ATLAS_NOTIFY service binding
                        ▼
@@ -33,13 +33,17 @@ cron 07:00 UTC ─▶ atlas-daily-digest (this worker)
                        ▼
             SPECULAR-CORE :11434 (Ollama, llama3.1:8b)
                        │
-                       ▼
-              #morning-digest Discord webhook
+                       ├──▶ #morning-digest Discord webhook
+                       │
+                       └──▶ ha.atlas-systems.uk /api/webhook/...
+                               │
+                               ▼
+                         tts.openai → media_player.specular_core
 ```
 
 ## How the morning run works
 
-At 07:00 UTC the cron pulls the last 50 ring-buffer entries over the service binding (the estate's banked rule: same-zone Worker-to-Worker calls over the public hostname 522) and filters them to the previous UTC calendar day. The filtered list becomes a compact, timestamped event report; Ramone's system prompt turns it into a short first-person paragraph; the paragraph posts as a single amber embed.
+At 12:00 UTC the cron pulls the last 50 ring-buffer entries over the service binding (the estate's banked rule: same-zone Worker-to-Worker calls over the public hostname 522) and filters them to the previous UTC calendar day. The filtered list becomes a compact, timestamped event report; Ramone's system prompt turns it into a short first-person paragraph; the paragraph posts as a single amber embed and is then sent to Home Assistant for TTS.
 
 Three coverage cases are handled explicitly, because the ring buffer holds 200 entries and the read endpoint pages at 50:
 
@@ -65,13 +69,18 @@ All under `api.atlas-systems.uk/digest`:
 
 The Worker runs at the edge; the model runs in the room. The bridge is a dedicated tunnel hostname (`ollama-tunnel.atlas-systems.uk` to `localhost:11434` on the existing cloudflared instance) protected by a Cloudflare Access application with a Service Auth policy. Raw Ollama has no authentication of its own, so unlike [`ramone-edge`](https://github.com/AtlasReaper311/ramone-edge)'s `X-Atlas-Secret` (which the origin FastAPI verifies), the gate here has to live at the edge: Access rejects any request that does not carry this Worker's service token headers before the tunnel ever sees it. Optional hardening is JWT validation in the cloudflared config, noted here and deliberately not required for this threat model.
 
-`OLLAMA_MODEL` is `llama3.1:8b`, Ramone's established conversational model, so the digest speaks with the same voice the room hears. The request allows 120 seconds: at 07:00 the model is usually cold, and the budget covers an NVMe load plus generation. `keep_alive` is ten minutes; the morning digest is not a reason to pin VRAM all day.
+`OLLAMA_MODEL` is `llama3.1:8b`, Ramone's established conversational model, so the digest speaks with the same voice the room hears. The request allows 120 seconds: at noon the model may still be cold, and the budget covers an NVMe load plus generation. `keep_alive` is ten minutes; the daily digest is not a reason to pin VRAM all day.
+
+## The spoken hop
+
+The spoken copy is deliberately a narrow handoff. The Worker posts JSON to one Home Assistant webhook URL stored in `HA_DIGEST_WEBHOOK_URL`; Home Assistant then runs `script.atlas_daily_digest_speak`, which uses the estate's existing `tts.openai` target and `media_player.specular_core` speaker path. If Home Assistant is offline or the webhook rejects the request, the Discord digest still succeeds and the Worker emits a warning through `atlas-notify`.
 
 ## Prerequisites
 
 - A new Discord channel (`#morning-digest`) with its own webhook. Dedicated on purpose; see the weekly digest section below.
 - The tunnel hostname and Access application described above.
 - An Access service token for this Worker.
+- The Home Assistant webhook automation in `L:\ramone-voice\config\automations.yaml`.
 
 ## Setup
 
@@ -90,11 +99,12 @@ Secrets, interactive prompt only:
 |---|---|
 | `DIGEST_WEBHOOK_URL` | The `#morning-digest` webhook |
 | `DIGEST_RUN_TOKEN` | Bearer token for `POST /digest/run` |
+| `HA_DIGEST_WEBHOOK_URL` | Full Home Assistant webhook URL for the spoken digest |
 | `NOTIFY_TOKEN` | Best-effort failure envelope to `atlas-notify` |
 | `CF_ACCESS_CLIENT_ID` | Access service token id |
 | `CF_ACCESS_CLIENT_SECRET` | Access service token secret |
 
-Deploys go through the estate's reusable [`atlas-infra`](https://github.com/AtlasReaper311/atlas-infra) `deploy-worker.yml` on every push to `main`. The cron fires at 07:00 UTC; the one line to edit lives in `wrangler.toml` under `[triggers]`.
+Deploys go through the estate's reusable [`atlas-infra`](https://github.com/AtlasReaper311/atlas-infra) `deploy-worker.yml` on every push to `main`. The cron fires at 12:00 UTC; the one line to edit lives in `wrangler.toml` under `[triggers]`.
 
 ## The synthesis prompt
 
@@ -120,7 +130,7 @@ The user message is a dated header, level counts, and one line per event in UTC 
 
 A missing digest with no explanation is worse than an honest one-line failure notice, so silence is the one output this Worker refuses to produce. If the feed or the model is unreachable, a red embed posts to the same channel: what failed and why, one line. The Worker also emits a `warning` envelope through the `ATLAS_NOTIFY` binding, which lands in the default alert channel and in the ring buffer; tomorrow's digest will therefore mention that today's was not written, which is exactly the kind of thing a morning digest should know about itself. If the webhook itself is the failure, the envelope and the tail logs are the remaining witnesses.
 
-The commonest expected failure is mundane: SPECULAR-CORE asleep at 07:00 means Ollama is unreachable, and the channel gets the honest notice instead of a digest. That is the design working, not breaking, and it is the reason this runs as a Worker cron rather than a local timer; a local job on a sleeping machine cannot post anything at all.
+The commonest expected failure is mundane: SPECULAR-CORE asleep at 12:00 means Ollama is unreachable, and the channel gets the honest notice instead of a digest. That is the design working, not breaking, and it is the reason this runs as a Worker cron rather than a local timer; a local job on a sleeping machine cannot post anything at all.
 
 ## How it differs from the weekly digest
 

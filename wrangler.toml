@@ -3,6 +3,7 @@
 # Secrets (wrangler secret put, interactive prompt only):
 #   DIGEST_WEBHOOK_URL       the dedicated #morning-digest Discord webhook
 #   DIGEST_RUN_TOKEN         bearer token for POST /digest/run
+#   HA_DIGEST_WEBHOOK_URL    Home Assistant webhook URL for spoken digest handoff
 #   NOTIFY_TOKEN             for the best-effort failure envelope to atlas-notify
 #   CF_ACCESS_CLIENT_ID      Access service token id for the Ollama tunnel hostname
 #   CF_ACCESS_CLIENT_SECRET  Access service token secret
@@ -19,10 +20,10 @@ routes = [
   { pattern = "api.atlas-systems.uk/digest/*", zone_id = "8ba6350a78c988447c111048b125f917" },
 ]
 
-# 07:00 UTC daily. Cron triggers are always UTC; during BST this posts
-# at 08:00 local. Edit this one line to change the send time.
+# 12:00 UTC daily. Cron triggers are always UTC; during BST this posts
+# at 13:00 local. Edit this one line to change the send time.
 [triggers]
-crons = ["0 7 * * *"]
+crons = ["0 12 * * *"]
 
 [vars]
 # The Access-gated tunnel hostname in front of the raw Ollama on
