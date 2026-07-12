@@ -1,0 +1,41 @@
+# atlas-daily-digest
+#
+# Secrets (wrangler secret put, interactive prompt only):
+#   DIGEST_WEBHOOK_URL       the dedicated #morning-digest Discord webhook
+#   DIGEST_RUN_TOKEN         bearer token for POST /digest/run
+#   NOTIFY_TOKEN             for the best-effort failure envelope to atlas-notify
+#   CF_ACCESS_CLIENT_ID      Access service token id for the Ollama tunnel hostname
+#   CF_ACCESS_CLIENT_SECRET  Access service token secret
+
+name = "atlas-daily-digest"
+main = "src/index.js"
+compatibility_date = "2026-07-12"
+
+# Route claims more specific than atlas-notify's /* wildcard, per the
+# estate's most-specific-first layering rule. zone_id literal, never
+# zone_name: scoped CI tokens cannot perform zone membership lookups.
+routes = [
+  { pattern = "api.atlas-systems.uk/digest", zone_id = "8ba6350a78c988447c111048b125f917" },
+  { pattern = "api.atlas-systems.uk/digest/*", zone_id = "8ba6350a78c988447c111048b125f917" },
+]
+
+# 07:00 UTC daily. Cron triggers are always UTC; during BST this posts
+# at 08:00 local. Edit this one line to change the send time.
+[triggers]
+crons = ["0 7 * * *"]
+
+[vars]
+# The Access-gated tunnel hostname in front of the raw Ollama on
+# SPECULAR-CORE (port 11434). See README, "The Ollama hop".
+OLLAMA_URL = "https://ollama-tunnel.atlas-systems.uk"
+# Ramone's established conversational model; the digest speaks with the
+# same voice the room hears.
+OLLAMA_MODEL = "llama3.1:8b"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[[services]]
+binding = "ATLAS_NOTIFY"
+service = "atlas-notify"
