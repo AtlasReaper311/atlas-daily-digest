@@ -35,8 +35,27 @@ const FOOTER = { text: "atlas-daily-digest // api.atlas-systems.uk/digest" };
 
 // atlas-notify's /notify/recent page ceiling. Requesting the maximum
 // gives the widest possible window into yesterday; the truncation flag
-// below handles the case where even 50 does not reach back far enough.
-const FEED_LIMIT = 50;
+// below handles the case where even this does not reach back far
+// enough. Raised from 50 alongside atlas-notify's RECENT_PAGE_MAX: the
+// old value was the binding constraint on a busy day, not the size of
+// the ring buffer behind it, so a dependency batch could consume the
+// whole window and leave the digest honestly reporting a truncated day.
+const FEED_LIMIT = 200;
+
+// Routine dependency traffic still posts to Discord; it just stops
+// consuming the digest's window. atlas-notify resolves this class
+// itself, so signal_class is the authority. The title prefixes are the
+// fallback for entries written before that field was persisted, and
+// they match atlas-infra's estate-rollout-board exclusions so both
+// surfaces agree on what counts as dependency noise.
+const DEPENDENCY_SIGNAL_CLASS = "deps_security";
+const DEPENDENCY_TITLE_PREFIXES = ["build(deps):", "chore(deps):"];
+
+function isDependencyNoise(event) {
+  if (event?.signal_class === DEPENDENCY_SIGNAL_CLASS) return true;
+  const text = `${event?.message ?? ""}`.trim().toLowerCase();
+  return DEPENDENCY_TITLE_PREFIXES.some((prefix) => text.startsWith(prefix));
+}
 
 // One formatted event line for the prompt. Ring buffer messages are
 // already trimmed to 280 characters upstream; this cap keeps a noisy
@@ -273,6 +292,7 @@ async function fetchDayEvents(env, day) {
   const { startMs, endMs } = utcDayWindow(day);
 
   const list = all.filter((e) => {
+    if (isDependencyNoise(e)) return false;
     const t = Date.parse(e?.ts);
     return Number.isFinite(t) && t >= startMs && t < endMs;
   });
