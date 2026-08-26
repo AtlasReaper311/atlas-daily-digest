@@ -14,7 +14,7 @@
 
 [![Deploy](https://github.com/AtlasReaper311/atlas-daily-digest/actions/workflows/deploy.yml/badge.svg)](https://github.com/AtlasReaper311/atlas-daily-digest/actions)
 ![Runtime](https://img.shields.io/badge/runtime-cloudflare_workers-f5a623?style=flat-square&labelColor=0a0a0f)
-![Voice](https://img.shields.io/badge/voice-llama3.1:8b-aaa9a0?style=flat-square&labelColor=0a0a0f)
+![Voice](https://img.shields.io/badge/voice-qwen3%3A14b-aaa9a0?style=flat-square&labelColor=0a0a0f)
 ![Plan](https://img.shields.io/badge/plan-workers_plus-aaa9a0?style=flat-square&labelColor=0a0a0f)
 
 A scheduled Worker that reads yesterday's estate activity from [`atlas-notify`](https://github.com/AtlasReaper311/atlas-notify)'s ring buffer, hands it to the local Ollama on SPECULAR-CORE, posts a three-to-five sentence account in Ramone's voice to its own Discord channel, then asks Home Assistant to speak the same paragraph in the room. Not a dashboard and not an event list; the point is a human-shaped answer to "what happened while I slept", and an honest one-line notice on the days that answer cannot be written.
@@ -31,7 +31,7 @@ cron 12:00 UTC ─▶ atlas-daily-digest (this worker)
               ollama-tunnel.atlas-systems.uk
                        │  cloudflared
                        ▼
-            SPECULAR-CORE :11434 (Ollama, llama3.1:8b)
+            SPECULAR-CORE :11434 (Ollama, qwen3:14b)
                        │
                        ├──▶ #morning-digest Discord webhook
                        │
@@ -69,7 +69,7 @@ All under `api.atlas-systems.uk/digest`:
 
 The Worker runs at the edge; the model runs in the room. The bridge is a dedicated tunnel hostname (`ollama-tunnel.atlas-systems.uk` to `localhost:11434` on the existing cloudflared instance) protected by a Cloudflare Access application with a Service Auth policy. Raw Ollama has no authentication of its own, so unlike [`ramone-edge`](https://github.com/AtlasReaper311/ramone-edge)'s `X-Atlas-Secret` (which the origin FastAPI verifies), the gate here has to live at the edge: Access rejects any request that does not carry this Worker's service token headers before the tunnel ever sees it. Optional hardening is JWT validation in the cloudflared config, noted here and deliberately not required for this threat model.
 
-`OLLAMA_MODEL` is `llama3.1:8b`, Ramone's established conversational model, so the digest speaks with the same voice the room hears. The request allows 120 seconds: at noon the model may still be cold, and the budget covers an NVMe load plus generation. `keep_alive` is ten minutes; the daily digest is not a reason to pin VRAM all day.
+`OLLAMA_MODEL` is `qwen3:14b`, the local Ollama model approved for this evidence-sensitive digest class after the llama3.1:8b fabrication regression. The request allows 120 seconds: at noon the model may still be cold, and the budget covers an NVMe load plus generation. `keep_alive` is ten minutes; the daily digest is not a reason to pin VRAM all day.
 
 ## The spoken hop
 

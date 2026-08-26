@@ -29,9 +29,9 @@ crons = ["0 12 * * *"]
 # The Access-gated tunnel hostname in front of the raw Ollama on
 # SPECULAR-CORE (port 11434). See README, "The Ollama hop".
 OLLAMA_URL = "https://ollama-tunnel.atlas-systems.uk"
-# Ramone's established conversational model; the digest speaks with the
-# same voice the room hears.
-OLLAMA_MODEL = "llama3.1:8b"
+# llama3.1:8b is blocked for evidence-sensitive synthesis by Atlas model
+# policy. qwen3:14b is the approved local Ollama model for this digest class.
+OLLAMA_MODEL = "qwen3:14b"
 
 [observability]
 enabled = true
