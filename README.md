@@ -1,149 +1,196 @@
-<div align="center">
-  <img src="https://raw.githubusercontent.com/AtlasReaper311/AtlasReaper311/main/atlas-icon-dark-256.png" width="88" alt="Atlas Systems"/>
-</div>
-
-# atlas-daily-digest
-
-```
-┌─────────────────────────────────────────────┐
-│  ATLAS SYSTEMS // atlas-daily-digest        │
-│  yesterday as one spoken paragraph,         │
-│  posted every morning                       │
-└─────────────────────────────────────────────┘
-```
-
-[![Deploy](https://github.com/AtlasReaper311/atlas-daily-digest/actions/workflows/deploy.yml/badge.svg)](https://github.com/AtlasReaper311/atlas-daily-digest/actions)
-![Runtime](https://img.shields.io/badge/runtime-cloudflare_workers-f5a623?style=flat-square&labelColor=0a0a0f)
-![Voice](https://img.shields.io/badge/voice-llama3.1:8b-aaa9a0?style=flat-square&labelColor=0a0a0f)
-![Plan](https://img.shields.io/badge/plan-workers_plus-aaa9a0?style=flat-square&labelColor=0a0a0f)
-
-A scheduled Worker that reads yesterday's estate activity from [`atlas-notify`](https://github.com/AtlasReaper311/atlas-notify)'s ring buffer, hands it to the local Ollama on SPECULAR-CORE, posts a three-to-five sentence account in Ramone's voice to its own Discord channel, then asks Home Assistant to speak the same paragraph in the room. Not a dashboard and not an event list; the point is a human-shaped answer to "what happened while I slept", and an honest one-line notice on the days that answer cannot be written.
-
-```
-cron 12:00 UTC ─▶ atlas-daily-digest (this worker)
-                       │
-                       │  ATLAS_NOTIFY service binding
-                       ▼
-                 atlas-notify /notify/recent  (yesterday's events)
-                       │
-                       │  CF-Access-Client-Id / -Secret
-                       ▼
-              ollama-tunnel.atlas-systems.uk
-                       │  cloudflared
-                       ▼
-            SPECULAR-CORE :11434 (Ollama, llama3.1:8b)
-                       │
-                       ├──▶ #morning-digest Discord webhook
-                       │
-                       └──▶ ha.atlas-systems.uk /api/webhook/...
-                               │
-                               ▼
-                         tts.openai → media_player.specular_core
-```
-
-## How the morning run works
-
-At 12:00 UTC the cron pulls the last 50 ring-buffer entries over the service binding (the estate's banked rule: same-zone Worker-to-Worker calls over the public hostname 522) and filters them to the previous UTC calendar day. The filtered list becomes a compact, timestamped event report; Ramone's system prompt turns it into a short first-person paragraph; the paragraph posts as a single amber embed and is then sent to Home Assistant for TTS.
-
-Three coverage cases are handled explicitly, because the ring buffer holds 200 entries and the read endpoint pages at 50:
-
-- Events found: normal digest, oldest-first, grouped and counted.
-- No events, feed reaches past the day boundary: a genuinely quiet day, reported calmly in two or three sentences.
-- No events visible but the feed no longer reaches back through yesterday: the digest says the record is incomplete rather than pretending the day was quiet. Missing data and a quiet day are different facts.
-
-The happy path never writes to the ring buffer, so a digest can never appear in the next day's digest.
-
-## Routes
-
-All under `api.atlas-systems.uk/digest`:
-
-| Method | Path | Description |
-|---|---|---|
-| GET | `/digest/health` | Unauthenticated liveness probe |
-| POST | `/digest/run` | Run the digest now; `Bearer DIGEST_RUN_TOKEN`, optional `?date=YYYY-MM-DD` backfill |
-| GET | `/digest/_meta` | The estate self-description contract |
-
-`/digest/run` executes the exact pipeline the cron does, so one successful manual run is proof the scheduled one will work.
-
-## The Ollama hop
-
-The Worker runs at the edge; the model runs in the room. The bridge is a dedicated tunnel hostname (`ollama-tunnel.atlas-systems.uk` to `localhost:11434` on the existing cloudflared instance) protected by a Cloudflare Access application with a Service Auth policy. Raw Ollama has no authentication of its own, so unlike [`ramone-edge`](https://github.com/AtlasReaper311/ramone-edge)'s `X-Atlas-Secret` (which the origin FastAPI verifies), the gate here has to live at the edge: Access rejects any request that does not carry this Worker's service token headers before the tunnel ever sees it. Optional hardening is JWT validation in the cloudflared config, noted here and deliberately not required for this threat model.
-
-`OLLAMA_MODEL` is `llama3.1:8b`, Ramone's established conversational model, so the digest speaks with the same voice the room hears. The request allows 120 seconds: at noon the model may still be cold, and the budget covers an NVMe load plus generation. `keep_alive` is ten minutes; the daily digest is not a reason to pin VRAM all day.
-
-## The spoken hop
-
-The spoken copy is deliberately a narrow handoff. The Worker posts JSON to one Home Assistant webhook URL stored in `HA_DIGEST_WEBHOOK_URL`; Home Assistant then runs `script.atlas_daily_digest_speak`, which uses the estate's existing `tts.openai` target and `media_player.specular_core` speaker path. If Home Assistant is offline or the webhook rejects the request, the Discord digest still succeeds and the Worker emits a warning through `atlas-notify`.
-
-## Prerequisites
-
-- A new Discord channel (`#morning-digest`) with its own webhook. Dedicated on purpose; see the weekly digest section below.
-- The tunnel hostname and Access application described above.
-- An Access service token for this Worker.
-- The Home Assistant webhook automation in `L:\ramone-voice\config\automations.yaml`.
-
-## Setup
-
-```bash
-npm install
-npm run check
-npm run lint
-npm run dry-run
-```
-
-`src/_meta.js` is vendored from [`atlas-api-index`](https://github.com/AtlasReaper311/atlas-api-index)`/shared/_meta.js`; that copy is canonical.
-
-Secrets, interactive prompt only:
-
-| Secret | Purpose |
-|---|---|
-| `DIGEST_WEBHOOK_URL` | The `#morning-digest` webhook |
-| `DIGEST_RUN_TOKEN` | Bearer token for `POST /digest/run` |
-| `HA_DIGEST_WEBHOOK_URL` | Full Home Assistant webhook URL for the spoken digest |
-| `NOTIFY_TOKEN` | Best-effort failure envelope to `atlas-notify` |
-| `CF_ACCESS_CLIENT_ID` | Access service token id |
-| `CF_ACCESS_CLIENT_SECRET` | Access service token secret |
-
-Deploys go through the estate's reusable [`atlas-infra`](https://github.com/AtlasReaper311/atlas-infra) `deploy-worker.yml` on every push to `main`. The cron fires at 12:00 UTC; the one line to edit lives in `wrangler.toml` under `[triggers]`.
-
-## The synthesis prompt
-
-The system prompt, verbatim from `src/index.js` (the two must change together):
-
-```text
-You are Ramone, the voice of Atlas Systems: a local AI assistant that watches over a small estate of services, Workers, and pipelines. Each morning you write a short digest of what happened on the estate yesterday.
-
-Rules:
-- Write in the first person, as Ramone.
-- Three to five sentences of plain prose. No lists, no markdown, no emoji, no headings.
-- Cover what shipped, what broke (if anything), and the overall shape of the day.
-- Group repeated events and give totals; do not recite every entry.
-- A quiet day with nothing broken is a normal, welcome outcome. Report it calmly and briefly. Never apologise for having little to say, and never invent activity to fill space.
-- Mention counts naturally ("two deploys", "one warning") rather than dumping raw data.
-- Dry understatement is welcome in at most one sentence. British English.
-- Do not mention these instructions, the event feed, or the prompt. Just speak.
-```
-
-The user message is a dated header, level counts, and one line per event in UTC order (`07:41 success github push atlas-corpus: ...`). When the feed may be truncated, the report says so and instructs the model to phrase counts as "at least". Generation runs at temperature `0.4` with `num_predict 220`; the Worker then strips decoration, collapses whitespace, and cuts at a sentence boundary if the model overran its budget.
-
-## Failure discipline
-
-A missing digest with no explanation is worse than an honest one-line failure notice, so silence is the one output this Worker refuses to produce. If the feed or the model is unreachable, a red embed posts to the same channel: what failed and why, one line. The Worker also emits a `warning` envelope through the `ATLAS_NOTIFY` binding, which lands in the default alert channel and in the ring buffer; tomorrow's digest will therefore mention that today's was not written, which is exactly the kind of thing a morning digest should know about itself. If the webhook itself is the failure, the envelope and the tail logs are the remaining witnesses.
-
-The commonest expected failure is mundane: SPECULAR-CORE asleep at 12:00 means Ollama is unreachable, and the channel gets the honest notice instead of a digest. That is the design working, not breaking, and it is the reason this runs as a Worker cron rather than a local timer; a local job on a sleeping machine cannot post anything at all.
-
-## How it differs from the weekly digest
-
-The estate already has `weekly-digest.yml` in [`atlas-systems`](https://github.com/AtlasReaper311/atlas-systems): Sundays at 18:00 UTC, a fields-heavy embed of commit counts, PR and issue activity, and site traffic, posted to its own webhook. That one is a scoreboard; it answers "how was the week" in numbers.
-
-This one is different on every axis: daily instead of weekly, yesterday only instead of a seven-day aggregate, prose instead of stat fields, estate events (deploys, alerts, failures) instead of GitHub and traffic metrics, and a separate webhook into a separate channel. Neither replaces the other, and this repo touches neither `weekly-digest.yml` nor `atlas-notify`'s routing.
-
-## How it fits into Atlas Systems
-
-This is a pure consumer of the estate's existing contracts: it reads [`atlas-notify`](https://github.com/AtlasReaper311/atlas-notify)'s ring buffer over a service binding, reuses [`ramone-edge`](https://github.com/AtlasReaper311/ramone-edge)'s tunnel-exposure pattern (with Access standing in for an origin-side secret), speaks through the same local model as the [Ramone](https://atlas-systems.uk/writing/ramone-local-ai-system/) voice pipeline, and answers the [`atlas-api-index`](https://github.com/AtlasReaper311/atlas-api-index) `/_meta` convention so the registry discovers it without configuration.
-
-Observability data is only finished when someone can absorb it without effort, and a system that narrates its own yesterday each morning gets read in a way a log never will.
-
----
-
-Part of [atlas-systems.uk](https://atlas-systems.uk)
+PGRpdiBhbGlnbj0iY2VudGVyIj4KICA8aW1nIHNyYz0iaHR0cHM6Ly9yYXcuZ2l0aHVidXNlcmNv
+bnRlbnQuY29tL0F0bGFzUmVhcGVyMzExL0F0bGFzUmVhcGVyMzExL21haW4vYXRsYXMtaWNvbi1k
+YXJrLTI1Ni5wbmciIHdpZHRoPSI4OCIgYWx0PSJBdGxhcyBTeXN0ZW1zIi8+CjwvZGl2PgoKIyBh
+dGxhcy1kYWlseS1kaWdlc3QKCmBgYArilIzilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDi
+lIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDi
+lIDilIDilIDilIDilJAK4pSCICBBVExBUyBTWVNURU1TIC8vIGF0bGFzLWRhaWx5LWRpZ2VzdCAg
+ICAgICAg4pSCCuKUgiAgeWVzdGVyZGF5IGFzIG9uZSBzcG9rZW4gcGFyYWdyYXBoLCAgICAgICAg
+ICAg4pSCCuKUgiAgcG9zdGVkIGV2ZXJ5IG1vcm5pbmcgICAgICAgICAgICAgICAgICAgICAgIOKU
+ggrUlIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDi
+lIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilIDilJgKYGBgCgpbIVtEZXBsb3ld
+KGh0dHBzOi8vZ2l0aHViLmNvbS9BdGxhc1JlYXBlcjMxMS9hdGxhcy1kYWlseS1kaWdlc3QvYWN0
+aW9ucy93b3JrZmxvd3MvZGVwbG95LnltbC9iYWRnZS5zdmcpXShodHRwczovL2dpdGh1Yi5jb20v
+QXRsYXNSZWFwZXIzMTEvYXRsYXMtZGFpbHktZGlnZXN0L2FjdGlvbnMpCiFbUnVudGltZV0oaHR0
+cHM6Ly9pbWcuc2hpZWxkcy5pby9iYWRnZS9ydW50aW1lLWNsb3VkZmxhcmVfd29ya2Vycy1mNWE2
+MjM/c3R5bGU9ZmxhdC1zcXVhcmUmbGFiZWxDb2xvcj0wYTBhMGYpCiFbVm9pY2VdKGh0dHBzOi8v
+aW1nLnNoaWVsZHMuaW8vYmFkZ2Uvdm9pY2UtcXdlbjMlM0ExNGItYWFhOWEwP3N0eWxlPWZsYXQt
+c3F1YXJlJmxhYmVsQ29sb3I9MGEwYTBmKQohW1BsYW5dKGh0dHBzOi8vaW1nLnNoaWVsZHMuaW8v
+YmFkZ2UvcGxhbi13b3JrZXJzX3BsdXMtYWFhOWEwP3N0eWxlPWZsYXQtc3F1YXJlJmxhYmVsQ29s
+b3I9MGEwYTBmKQoKQSBzY2hlZHVsZWQgV29ya2VyIHRoYXQgcmVhZHMgeWVzdGVyZGF5J3MgZXN0
+YXRlIGFjdGl2aXR5IGZyb20gW2BhdGxhcy1ub3RpZnlgXShodHRwczovL2dpdGh1Yi5jb20vQXRs
+YXNSZWFwZXIzMTEvYXRsYXMtbm90aWZ5KSdzIHJpbmcgYnVmZmVyLCBoYW5kcyBpdCB0byB0aGUg
+bG9jYWwgT2xsYW1hIG9uIFNQRUNVTEFSLUNPUkUsIHBvc3RzIGEgdGhyZWUtdG8tZml2ZSBzZW50
+ZW5jZSBhY2NvdW50IGluIFJhbW9uZSdzIHZvaWNlIHRvIGl0cyBvd24gRGlzY29yZCBjaGFubmVs
+LCB0aGVuIGFza3MgSG9tZSBBc3Npc3RhbnQgdG8gc3BlYWsgdGhlIHNhbWUgcGFyYWdyYXBoIGlu
+IHRoZSByb29tLiBOb3QgYSBkYXNoYm9hcmQgYW5kIG5vdCBhbiBldmVudCBsaXN0OyB0aGUgcG9p
+bnQgaXMgYSBodW1hbi1zaGFwZWQgYW5zd2VyIHRvICJ3aGF0IGhhcHBlbmVkIHdoaWxlIEkgc2xl
+cHQiLCBhbmQgYW4gaG9uZXN0IG9uZS1saW5lIG5vdGljZSBvbiB0aGUgZGF5cyB0aGF0IGFuc3dl
+ciBjYW5ub3QgYmUgd3JpdHRlbi4KCmBgYApjcm9uIDEyOjAwIFVUQyDilpbilbYgYXRsYXMtZGFp
+bHktZGlnZXN0ICh0aGlzIHdvcmtlcikKICAgICAgICAgICAgICAgICAgICAgICDilIIKICAgICAg
+ICAgICAgICAgICAgICAgICDilIIgIEFUTEFTX05PVElGWSBzZXJ2aWNlIGJpbmRpbmcKICAgICAg
+ICAgICAgICAgICAgICAgICDilrYKICAgICAgICAgICAgICAgICBhdGxhcy1ub3RpZnkgL25vdGlm
+eS9yZWNlbnQgICh5ZXN0ZXJkYXkncyBldmVudHMpCiAgICAgICAgICAgICAgICAgICAgICAg4pSC
+CiAgICAgICAgICAgICAgICAgICAgICAg4pSCICBDRi1BY2Nlc3MtQ2xpZW50LUlkIC8gLVNlY3Jl
+dAogICAgICAgICAgICAgICAgICAgICAgIOKWtgogICAgICAgICAgICAgIG9sbGFtYS10dW5uZWwu
+YXRsYXMtc3lzdGVtcy51awogICAgICAgICAgICAgICAgICAgICAgIOKUgiAgY2xvdWRmbGFyZWQK
+ICAgICAgICAgICAgICAgICAgICAgICDilrYKICAgICAgICAgICAgU1BFQ1VMQVItQ09SRSA6MTE0
+MzQgKE9sbGFtYSwgcXdlbjM6MTRiKQogICAgICAgICAgICAgICAgICAgICAgIOKUgwogICAgICAg
+ICAgICAgICAgICAgICAgICDilIzilIDilrbilIAgI21vcm5pbmctZGlnZXN0IERpc2NvcmQgd2Vi
+aG9vawogICAgICAgICAgICAgICAgICAgICAgIOKUggogICAgICAgICAgICAgICAgICAgICAgIOKU
+lOKUgOKWtiBoYS5hdGxhcy1zeXN0ZW1zLnVrIC9hcGkvd2ViaG9vay8uLi4KICAgICAgICAgICAg
+ICAgICAgICAgICAgICAgICDilIIKICAgICAgICAgICAgICAgICAgICAgICAgICAgIOKWtgogICAg
+ICAgICAgICAgICAgICAgICAgICAgIHR0cy5vcGVuYWkg4oaSIG1lZGlhX3BsYXllci5zcGVjdWxh
+cl9jb3JlCmBgYAoKIyMgSG93IHRoZSBtb3JuaW5nIHJ1biB3b3JrcwoKQXQgMTI6MDAgVVRDIHRo
+ZSBjcm9uIHB1bGxzIHRoZSBsYXN0IDUwIHJpbmctYnVmZmVyIGVudHJpZXMgb3ZlciB0aGUgc2Vy
+dmljZSBiaW5kaW5nICh0aGUgZXN0YXRlJ3MgYmFua2VkIHJ1bGU6IHNhbWUtem9uZSBXb3JrZXIt
+dG8tV29ya2VyIGNhbGxzIG92ZXIgdGhlIHB1YmxpYyBob3N0bmFtZSA1MjIpIGFuZCBmaWx0ZXJz
+IHRoZW0gdG8gdGhlIHByZXZpb3VzIFVUQyBjYWxlbmRhciBkYXkuIFRoZSBmaWx0ZXJlZCBsaXN0
+IGJlY29tZXMgYSBjb21wYWN0LCB0aW1lc3RhbXBlZCBldmVudCByZXBvcnQ7IFJhbW9uZSdzIHN5
+c3RlbSBwcm9tcHQgdHVybnMgaXQgaW50byBhIHNob3J0IGZpcnN0LXBlcnNvbiBwYXJhZ3JhcGg7
+IHRoZSBwYXJhZ3JhcGggcG9zdHMgYXMgYSBzaW5nbGUgYW1iZXIgZW1iZWQgYW5kIGlzIHRoZW4g
+c2VudCB0byBIb21lIEFzc2lzdGFudCBmb3IgVFRTLgoKVGhyZWUgY292ZXJhZ2UgY2FzZXMgYXJl
+IGhhbmRsZWQgZXhwbGljaXRseSwgYmVjYXVzZSB0aGUgcmluZyBidWZmZXIgaG9sZHMgMjAwIGVu
+dHJpZXMgYW5kIHRoZSByZWFkIGVuZHBvaW50IHBhZ2VzIGF0IDUwOgoKLSBFdmVudHMgZm91bmQ6
+IG5vcm1hbCBkaWdlc3QsIG9sZGVzdC1maXJzdCwgZ3JvdXBlZCBhbmQgY291bnRlZC4KLSBObyBl
+dmVudHMsIGZlZWQgcmVhY2hlcyBwYXN0IHRoZSBkYXkgYm91bmRhcnk6IGEgZ2VudWluZWx5IHF1
+aWV0IGRheSwgcmVwb3J0ZWQgY2FsbWx5IGluIHR3byBvciB0aHJlZSBzZW50ZW5jZXMuCi0gTm8g
+ZXZlbnRzIHZpc2libGUgYnV0IHRoZSBmZWVkIG5vIGxvbmdlciByZWFjaGVzIGJhY2sgdGhyb3Vn
+aCB5ZXN0ZXJkYXk6IHRoZSBkaWdlc3Qgc2F5cyB0aGUgcmVjb3JkIGlzIGluY29tcGxldGUgcmF0
+aGVyIHRoYW4gcHJldGVuZGluZyB0aGUgZGF5IHdhcyBxdWlldC4gTWlzc2luZyBkYXRhIGFuZCBh
+IHF1aWV0IGRheSBhcmUgZGlmZmVyZW50IGZhY3RzLgoKVGhlIGhhcHB5IHBhdGggbmV2ZXIgd3Jp
+dGVzIHRvIHRoZSByaW5nIGJ1ZmZlciwgc28gYSBkaWdlc3QgY2FuIG5ldmVyIGFwcGVhciBpbiB0
+aGUgbmV4dCBkYXkncyBkaWdlc3QuCgojIyBSb3V0ZXMKCkFsbCB1bmRlciBgYXBpLmF0bGFzLXN5
+c3RlbXMudWsvZGlnZXN0YDoKCnwgTWV0aG9kIHwgUGF0aCB8IERlc2NyaXB0aW9uIHwKfC0tLXwt
+LS18LS0tfAp8IEdFVCB8IGAvZGlnZXN0L2hlYWx0aGAgfCBVbmF1dGhlbnRpY2F0ZWQgbGl2ZW5l
+c3MgcHJvYmUgfAp8IFBPU1QgfCBgL2RpZ2VzdC9ydW5gIHwgUnVuIHRoZSBkaWdlc3Qgbm93OyBg
+QmVhcmVyIERJR0VTVF9SVU5fVE9LRU5gLCBvcHRpb25hbCBgP2RhdGU9WVlZWS1NTS1ERGAgYmFj
+a2ZpbGwgfAp8IEdFVCB8IGAvZGlnZXN0L19tZXRhYCB8IFRoZSBlc3RhdGUgc2VsZi1kZXNjcmlw
+dGlvbiBjb250cmFjdCB8CgpgL2RpZ2VzdC9ydW5gIGV4ZWN1dGVzIHRoZSBleGFjdCBwaXBlbGlu
+ZSB0aGUgY3JvbiBkb2VzLCBzbyBvbmUgc3VjY2Vzc2Z1bCBtYW51YWwgcnVuIGlzIHByb29mIHRo
+ZSBzY2hlZHVsZWQgb25lIHdpbGwgd29yay4KCiMjIFRoZSBPbGxhbWEgaG9wCgpUaGUgV29ya2Vy
+IHJ1bnMgYXQgdGhlIGVkZ2U7IHRoZSBtb2RlbCBydW5zIGluIHRoZSByb29tLiBUaGUgYnJpZGdl
+IGlzIGEgZGVkaWNhdGVkIHR1bm5lbCBob3N0bmFtZSAoYG9sbGFtYS10dW5uZWwuYXRsYXMtc3lz
+dGVtcy51a2AgdG8gYGxvY2FsaG9zdDoxMTQzNGAgb24gdGhlIGV4aXN0aW5nIGNsb3VkZmxhcmVk
+IGluc3RhbmNlKSBwcm90ZWN0ZWQgYnkgYSBDbG91ZGZsYXJlIEFjY2VzcyBhcHBsaWNhdGlvbiB3
+aXRoIGEgU2VydmljZSBBdXRoIHBvbGljeS4gUmF3IE9sbGFtYSBoYXMgbm8gYXV0aGVudGljYXRp
+b24gb2YgaXRzIG93biwgc28gdW5saWtlIFtgcmFtb25lLWVkZ2VgXShodHRwczovL2dpdGh1Yi5j
+b20vQXRsYXNSZWFwZXIzMTEvcmFtb25lLWVkZ2UpJ3MgYFgtQXRsYXMtU2VjcmV0YCAod2hpY2gg
+dGhlIG9yaWdpbiBGYXN0QVBJIHZlcmlmaWVzKSwgdGhlIGdhdGUgaGVyZSBoYXMgdG8gbGl2ZSBh
+dCB0aGUgZWRnZTogQWNjZXNzIHJlamVjdHMgYW55IHJlcXVlc3QgdGhhdCBkb2VzIG5vdCBjYXJy
+eSB0aGlzIFdvcmtlcidzIHNlcnZpY2UgdG9rZW4gaGVhZGVycyBiZWZvcmUgdGhlIHR1bm5lbCBl
+dmVyIHNlZXMgaXQuIE9wdGlvbmFsIGhhcmRlbmluZyBpcyBKV1QgdmFsaWRhdGlvbiBpbiB0aGUg
+Y2xvdWRmbGFyZWQgY29uZmlnLCBub3RlZCBoZXJlIGFuZCBkZWxpYmVyYXRlbHkgbm90IHJlcXVp
+cmVkIGZvciB0aGlzIHRocmVhdCBtb2RlbC4KCmBPTExBTUFfTU9ERUxgIGlzIGBxd2VuMzoxNGJg
+LiBSYW1vbmUncyBvcmlnaW5hbCBjb252ZXJzYXRpb25hbCBtb2RlbCB3YXMgYGxsYW1hMy4xOjhi
+YCwgYnV0IHRoYXQgbW9kZWwgaXMgcGVybWFuZW50bHkgYmxvY2tlZCBmb3IgZXZpZGVuY2Utc2Vu
+c2l0aXZlIHJlYXNvbmluZyBhZnRlciBhIGZhYnJpY2F0aW9uIHJlZ3Jlc3Npb24gKHNlZSBNT0RF
+TC1QT0xJQ1kubWQpLCBhbmQgdGhpcyBXb3JrZXIgc3VtbWFyaXNlcyByZWFsIGVzdGF0ZSBhY3Rp
+dml0eSBmcm9tIGV2ZW50IGRhdGEsIHdoaWNoIGlzIGV4YWN0bHkgdGhhdCByaXNrIGNsYXNzLiBg
+cXdlbjM6MTRiYCBpcyB0aGUgZXN0YXRlJ3MgYXBwcm92ZWQgbW9kZWwgZm9yIHRoaXMga2luZCBv
+ZiB0YXNrIGFuZCBhbHJlYWR5IHJ1bnMgb24gU1BFQ1VMQVItQ09SRSBhdCBsb3cgbGF0ZW5jeS4g
+VGhlIHJlcXVlc3QgYWxsb3dzIDEyMCBzZWNvbmRzOiBhdCBub29uIHRoZSBtb2RlbCBtYXkgc3Rp
+bGwgYmUgY29sZCwgYW5kIHRoZSBidWRnZXQgY292ZXJzIGFuIE5WTWUgbG9hZCBwbHVzIGdlbmVy
+YXRpb24uIGBrZWVwX2FsaXZlYCBpcyB0ZW4gbWludXRlczsgdGhlIGRhaWx5IGRpZ2VzdCBpcyBu
+b3QgYSByZWFzb24gdG8gcGluIFZSQU0gYWxsIGRheS4KCiMjIFRoZSBzcG9rZW4gaG9wCgpUaGUg
+c3Bva2VuIGNvcHkgaXMgZGVsaWJlcmF0ZWx5IGEgbmFycm93IGhhbmRvZmYuIFRoZSBXb3JrZXIg
+cG9zdHMgSlNPTiB0byBvbmUgSG9tZSBBc3Npc3RhbnQgd2ViaG9vayBVUkwgc3RvcmVkIGluIGBI
+QV9ESUdFU1RfV0VCSE9PS19VUkxgOyBIb21lIEFzc2lzdGFudCB0aGVuIHJ1bnMgYHNjcmlwdC5h
+dGxhc19kYWlseV9kaWdlc3Rfc3BlYWtgLCB3aGljaCB1c2VzIHRoZSBlc3RhdGUncyBleGlzdGlu
+ZyBgdHRzLm9wZW5haWAgdGFyZ2V0IGFuZCBgbWVkaWFfcGxheWVyLnNwZWN1bGFyX2NvcmVgIHNw
+ZWFrZXIgcGF0aC4gSWYgSG9tZSBBc3Npc3RhbnQgaXMgb2ZmbGluZSBvciB0aGUgd2ViaG9vayBy
+ZWplY3RzIHRoZSByZXF1ZXN0LCB0aGUgRGlzY29yZCBkaWdlc3Qgc3RpbGwgc3VjY2VlZHMgYW5k
+IHRoZSBXb3JrZXIgZW1pdHMgYSB3YXJuaW5nIHRocm91Z2ggYGF0bGFzLW5vdGlmeWAuCgojIyBQ
+cmVyZXF1aXNpdGVzCgotIEEgbmV3IERpc2NvcmQgY2hhbm5lbCAoYCNtb3JuaW5nLWRpZ2VzdGAp
+IHdpdGggaXRzIG93biB3ZWJob29rLiBEZWRpY2F0ZWQgb24gcHVycG9zZTsgc2VlIHRoZSB3ZWVr
+bHkgZGlnZXN0IHNlY3Rpb24gYmVsb3cuCi0gVGhlIHR1bm5lbCBob3N0bmFtZSBhbmQgQWNjZXNz
+IGFwcGxpY2F0aW9uIGRlc2NyaWJlZCBhYm92ZS4KLSBBbiBBY2Nlc3Mgc2VydmljZSB0b2tlbiBm
+b3IgdGhpcyBXb3JrZXIuCi0gVGhlIEhvbWUgQXNzaXN0YW50IHdlYmhvb2sgYXV0b21hdGlvbiBp
+biBgTDpcXHJhbW9uZS12b2ljZVxcY29uZmlnXFxhdXRvbWF0aW9ucy55YW1sYC4KCiMjIFNldHVw
+CgpgYGBiYXNoCm5wbSBpbnN0YWxsCm5wbSBydW4gY2hlY2sKbnBtIHJ1biBsaW50Cm5wbSBydW4g
+ZHJ5LXJ1bgpgYGAKCmBzcmMvX21ldGEuanNgIGlzIHZlbmRvcmVkIGZyb20gW2BhdGxhcy1hcGkt
+aW5kZXhgXShodHRwczovL2dpdGh1Yi5jb20vQXRsYXNSZWFwZXIzMTEvYXRsYXMtYXBpLWluZGV4
+KWAvc2hhcmVkL19tZXRhLmpzYDsgdGhhdCBjb3B5IGlzIGNhbm9uaWNhbC4KClNlY3JldHMsIGlu
+dGVyYWN0aXZlIHByb21wdCBvbmx5OgoKfCBTZWNyZXQgfCBQdXJwb3NlIHwKfC0tLXwtLS18Cnwg
+YERJR0VTVF9XRUJIT09LX1VSTGAgfCBUaGUgYCNtb3JuaW5nLWRpZ2VzdGAgd2ViaG9vayB8Cnwg
+YERJR0VTVF9SVU5fVE9LRU5gIHwgQmVhcmVyIHRva2VuIGZvciBgUE9TVCAvZGlnZXN0L3J1bmAg
+fAp8IGBIQV9ESUdFU1RfV0VCSE9PS19VUkxgIHwgRnVsbCBIb21lIEFzc2lzdGFudCB3ZWJob29r
+IFVSTCBmb3IgdGhlIHNwb2tlbiBkaWdlc3QgfAp8IGBOT1RJRllfVE9LRU5gIHwgQmVzdC1lZmZv
+cnQgZmFpbHVyZSBlbnZlbG9wZSB0byBgYXRsYXMtbm90aWZ5YCB8Cnwgd0NGX0FDQ0VTU19DTElF
+TlRfSURgIHwgQWNjZXNzIHNlcnZpY2UgdG9rZW4gaWQgfAp8IGBDRl9BQ0NFU1NfQ0xJRU5UX1NF
+Q1JFVGAgfCBBY2Nlc3Mgc2VydmljZSB0b2tlbiBzZWNyZXQgfAoKRGVwbG95cyBnbyB0aHJvdWdo
+IHRoZSBlc3RhdGUncyByZXVzYWJsZSBbYGF0bGFzLWluZnJhYF0oaHR0cHM6Ly9naXRodWIuY29t
+L0F0bGFzUmVhcGVyMzExL2F0bGFzLWluZnJhKSBgZGVwbG95LXdvcmtlci55bWxgIG9uIGV2ZXJ5
+IHB1c2ggdG8gYG1haW5gLiBUaGUgY3JvbiBmaXJlcyBhdCAxMjowMCBVVEM7IHRoZSBvbmUgbGlu
+ZSB0byBlZGl0IGxpdmVzIGluIGB3cmFuZ2xlci50b21sYCB1bmRlciBgW3RyaWdnZXJzXWAuCgoj
+IyBUaGUgc3ludGhlc2lzIHByb21wdAoKVGhlIHN5c3RlbSBwcm9tcHQsIHZlcmJhdGltIGZyb20g
+YHNyYy9pbmRleC5qc2AgKHRoZSB0d28gbXVzdCBjaGFuZ2UgdG9nZXRoZXIpOgoKYGBgdGV4dApZ
+b3UgYXJlIFJhbW9uZSwgdGhlIHZvaWNlIG9mIEF0bGFzIFN5c3RlbXM6IGEgbG9jYWwgQUkgYXNz
+aXN0YW50IHRoYXQgd2F0Y2hlcyBvdmVyIGEgc21hbGwgZXN0YXRlIG9mIHNlcnZpY2VzLCBXb3Jr
+ZXJzLCBhbmQgcGlwZWxpbmVzLiBFYWNoIG1vcm5pbmcgeW91IHdyaXRlIGEgc2hvcnQgZGlnZXN0
+IG9mIHdoYXQgaGFwcGVuZWQgb24gdGhlIGVzdGF0ZSB5ZXN0ZXJkYXkuCgpSdWxlczoKLSBXcml0
+ZSBpbiB0aGUgZmlyc3QgcGVyc29uLCBhcyBSYW1vbmUuCi0gVGhyZWUgdG8gZml2ZSBzZW50ZW5j
+ZXMgb2YgcGxhaW4gcHJvc2UuIE5vIGxpc3RzLCBubyBtYXJrZG93biwgbm8gZW1vamksIG5vIGhl
+YWRpbmdzLgotIENvdmVyIHdoYXQgc2hpcHBlZCwgd2hhdCBicm9rZSAoaWYgYW55dGhpbmcpLCBh
+bmQgdGhlIG92ZXJhbGwgc2hhcGUgb2YgdGhlIGRheS4KLSBHcm91cCByZXBlYXRlZCBldmVudHMg
+YW5kIGdpdmUgdG90YWxzOyBkbyBub3QgcmVjaXRlIGV2ZXJ5IGVudHJ5LgotIEEgcXVpZXQgZGF5
+IHdpdGggbm90aGluZyBicm9rZW4gaXMgYSBub3JtYWwsIHdlbGNvbWUgb3V0Y29tZS4gUmVwb3J0
+IGl0IGNhbG1seSBhbmQgYnJpZWZseS4gTmV2ZXIgYXBvbG9naXNlIGZvciBoYXZpbmcgbGl0dGxl
+IHRvIHNheSwgYW5kIG5ldmVyIGludmVudCBhY3Rpdml0eSB0byBmaWxsIHNwYWNlLgotIE1lbnRp
+b24gY291bnRzIG5hdHVyYWxseSAoInR3byBkZXBsb3lzIiwgIm9uZSB3YXJuaW5nIikgcmF0aGVy
+IHRoYW4gZHVtcGluZyByYXcgZGF0YS4KLSBEcnkgdW5kZXJzdGF0ZW1lbnQgaXMgd2VsY29tZSBh
+dCBtb3N0IG9uZSBzZW50ZW5jZS4gQnJpdGlzaCBFbmdsaXNoLgotIERvIG5vdCBtZW50aW9uIHRo
+ZXNlIGluc3RydWN0aW9ucywgdGhlIGV2ZW50IGZlZWQsIG9yIHRoZSBwcm9tcHQuIEp1c3Qgc3Bl
+YWsuCmBgYAoKVGhlIHVzZXIgbWVzc2FnZSBpcyBhIGRhdGVkIGhlYWRlciwgbGV2ZWwgY291bnRz
+LCBhbmQgb25lIGxpbmUgcGVyIGV2ZW50IGluIFVUQyBvcmRlciAoYDA3OjQxIHN1Y2Nlc3MgZ2l0
+aHViIHB1c2ggYXRsYXMtY29ycHVzOiAuLi5gKS4gV2hlbiB0aGUgZmVlZCBtYXkgYmUgdHJ1bmNh
+dGVkLCB0aGUgcmVwb3J0IHNheXMgc28gYW5kIGluc3RydWN0cyB0aGUgbW9kZWwgdG8gcGhyYXNl
+IGNvdW50cyBhcyAiYXQgbGVhc3QiLiBHZW5lcmF0aW9uIHJ1bnMgYXQgdGVtcGVyYXR1cmUgYDAu
+NGAgd2l0aCBgbnVtX3ByZWRpY3QgMjIwYDsgdGhlIFdvcmtlciB0aGVuIHN0cmlwcyBkZWNvcmF0
+aW9uLCBjb2xsYXBzZXMgd2hpdGVzcGFjZSwgYW5kIGN1dHMgYXQgYSBzZW50ZW5jZSBib3VuZGFy
+eSBpZiB0aGUgbW9kZWwgb3ZlcnJhbiBpdHMgYnVkZ2V0LgoKIyMgRmFpbHVyZSBkaXNjaXBsaW5l
+CgpBIG1pc3NpbmcgZGlnZXN0IHdpdGggbm8gZXhwbGFuYXRpb24gaXMgd29yc2UgdGhhbiBhbiBo
+b25lc3Qgb25lLWxpbmUgZmFpbHVyZSBub3RpY2UsIHNvIHNpbGVuY2UgaXMgdGhlIG9uZSBvdXRw
+dXQgdGhpcyBXb3JrZXIgcmVmdXNlcyB0byBwcm9kdWNlLiBJZiB0aGUgZmVlZCBvciB0aGUgbW9k
+ZWwgaXMgdW5yZWFjaGFibGUsIGEgcmVkIGVtYmVkIHBvc3RzIHRvIHRoZSBzYW1lIGNoYW5uZWw6
+IHdoYXQgZmFpbGVkIGFuZCB3aHksIG9uZSBsaW5lLiBUaGUgV29ya2VyIGFsc28gZW1pdHMgYSBg
+d2FybmluZ2AgZW52ZWxvcGUgdGhyb3VnaCB0aGUgYEFUTEFTX05PVElGWWAgYmluZGluZywgd2hp
+Y2ggbGFuZHMgaW4gdGhlIGRlZmF1bHQgYWxlcnQgY2hhbm5lbCBhbmQgaW4gdGhlIHJpbmcgYnVm
+ZmVyOyB0b21vcnJvdydzIGRpZ2VzdCB3aWxsIHRoZXJlZm9yZSBtZW50aW9uIHRoYXQgdG9kYXkn
+cyB3YXMgbm90IHdyaXR0ZW4sIHdoaWNoIGlzIGV4YWN0bHkgdGhlIGtpbmQgb2YgdGhpbmcgYSBt
+b3JuaW5nIGRpZ2VzdCBzaG91bGQga25vdyBhYm91dCBpdHNlbGYuIElmIHRoZSB3ZWJob29rIGl0
+c2VsZiBpcyB0aGUgZmFpbHVyZSwgdGhlIGVudmVsb3BlIGFuZCB0aGUgdGFpbCBsb2dzIGFyZSB0
+aGUgcmVtYWluaW5nIHdpdG5lc3Nlcy4KClRoZSBjb21tb25lc3QgZXhwZWN0ZWQgZmFpbHVyZSBp
+cyBtdW5kYW5lOiBTUEVDVUxBUi1DT1JFIGFzbGVlcCBhdCAxMjowMCBtZWFucyBPbGxhbWEgaXMg
+dW5yZWFjaGFibGUsIGFuZCB0aGUgY2hhbm5lbCBnZXRzIHRoZSBob25lc3Qgbm90aWNlIGluc3Rl
+YWQgb2YgYSBkaWdlc3QuIFRoYXQgaXMgdGhlIGRlc2lnbiB3b3JraW5nLCBub3QgYnJlYWtpbmcs
+IGFuZCBpdCBpcyB0aGUgcmVhc29uIHRoaXMgcnVucyBhcyBhIFdvcmtlciBjcm9uIHJhdGhlciB0
+aGFuIGEgbG9jYWwgdGltZXI7IGEgbG9jYWwgam9iIG9uIGEgc2xlZXBpbmcgbWFjaGluZSBjYW5u
+b3QgcG9zdCBhbnl0aGluZyBhdCBhbGwuCgojIyBIb3cgaXQgZGlmZmVycyBmcm9tIHRoZSB3ZWVr
+bHkgZGlnZXN0CgpUaGUgZXN0YXRlIGFscmVhZHkgaGFzIGB3ZWVrbHktZGlnZXN0LnltbGAgaW4g
+W2BhdGxhcy1zeXN0ZW1zYF0oaHR0cHM6Ly9naXRodWIuY29tL0F0bGFzUmVhcGVyMzExL2F0bGFz
+LXN5c3RlbXMpOiBTdW5kYXlzIGF0IDE4OjAwIFVUQywgYSBmaWVsZHMtaGVhdnkgZW1iZWQgb2Yg
+Y29tbWl0IGNvdW50cywgUFIgYW5kIGlzc3VlIGFjdGl2aXR5LCBhbmQgc2l0ZSB0cmFmZmljLCBw
+b3N0ZWQgdG8gaXRzIG93biB3ZWJob29rLiBUaGF0IG9uZSBpcyBhIHNjb3JlYm9hcmQ7IGl0IGFu
+c3dlcnMgImhvdyB3YXMgdGhlIHdlZWsiIGluIG51bWJlcnMuCgpUaGlzIG9uZSBpcyBkaWZmZXJl
+bnQgb24gZXZlcnkgYXhpczogZGFpbHkgaW5zdGVhZCBvZiB3ZWVrbHksIHllc3RlcmRheSBvbmx5
+IGluc3RlYWQgb2YgYSBzZXZlbi1kYXkgYWdncmVnYXRlLCBwcm9zZSBpbnN0ZWFkIG9mIHN0YXQg
+ZmllbGRzLCBlc3RhdGUgZXZlbnRzIChkZXBsb3lzLCBhbGVydHMsIGZhaWx1cmVzKSBpbnN0ZWFk
+IG9mIEdpdEh1YiBhbmQgdHJhZmZpYyBtZXRyaWNzLCBhbmQgYSBzZXBhcmF0ZSB3ZWJob29rIGlu
+dG8gYSBzZXBhcmF0ZSBjaGFubmVsLiBOZWl0aGVyIHJlcGxhY2VzIHRoZSBvdGhlciwgYW5kIHRo
+aXMgcmVwbyB0b3VjaGVzIG5laXRoZXIgYHdlZWtseS1kaWdlc3QueW1sYCBub3IgYGF0bGFzLW5v
+dGlmeWAncyByb3V0aW5nLgoKIyMgSG93IGl0IGZpdHMgaW50byBBdGxhcyBTeXN0ZW1zCgpUaGlz
+IGlzIGEgcHVyZSBjb25zdW1lciBvZiB0aGUgZXN0YXRlJ3MgZXhpc3RpbmcgY29udHJhY3RzOiBp
+dCByZWFkcyBbYGF0bGFzLW5vdGlmeWBdKGh0dHBzOi8vZ2l0aHViLmNvbS9BdGxhc1JlYXBlcjMx
+MS9hdGxhcy1ub3RpZnkpJ3MgcmluZyBidWZmZXIgb3ZlciBhIHNlcnZpY2UgYmluZGluZywgcmV1
+c2VzIFtgcmFtb25lLWVkZ2VgXShodHRwczovL2dpdGh1Yi5jb20vQXRsYXNSZWFwZXIzMTEvcmFt
+b25lLWVkZ2UpJ3MgdHVubmVsLWV4cG9zdXJlIHBhdHRlcm4gKHdpdGggQWNjZXNzIHN0YW5kaW5n
+IGluIGZvciBhbiBvcmlnaW4tc2lkZSBzZWNyZXQpLCBzcGVha3MgdGhyb3VnaCB0aGUgc2FtZSBs
+b2NhbCBtb2RlbCBhcyB0aGUgW1JhbW9uZV0oaHR0cHM6Ly9hdGxhcy1zeXN0ZW1zLnVrL3dyaXRp
+bmcvcmFtb25lLWxvY2FsLWFpLXN5c3RlbS8pIHZvaWNlIHBpcGVsaW5lLCBhbmQgYW5zd2VycyB0
+aGUgW2BhdGxhcy1hcGktaW5kZXhgXShodHRwczovL2dpdGh1Yi5jb20vQXRsYXNSZWFwZXIzMTEv
+YXRsYXMtYXBpLWluZGV4KSBgL19tZXRhYCBjb252ZW50aW9uIHNvIHRoZSByZWdpc3RyeSBkaXNj
+b3ZlcnMgaXQgd2l0aG91dCBjb25maWd1cmF0aW9uLgoKT2JzZXJ2YWJpbGl0eSBkYXRhIGlzIG9u
+bHkgZmluaXNoZWQgd2hlbiBzb21lb25lIGNhbiBhYnNvcmIgaXQgd2l0aG91dCBlZmZvcnQsIGFu
+ZCBhIHN5c3RlbSB0aGF0IG5hcnJhdGVzIGl0cyBvd24geWVzdGVyZGF5IGVhY2ggbW9ybmluZyBn
+ZXRzIHJlYWQgaW4gYSB3YXkgYSBsb2cgbmV2ZXIgd2lsbC4KCi0tLQoKUGFydCBvZiBbYXRsYXMt
+c3lzdGVtcy51a10oaHR0cHM6Ly9hdGxhcy1zeXN0ZW1zLnVrKQo=
