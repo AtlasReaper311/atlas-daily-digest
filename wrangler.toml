@@ -1,32 +1,42 @@
-IyBhdGxhcy1kYWlseS1kaWdlc3QKIwojIFNlY3JldHMgKHdyYW5nbGVyIHNlY3JldCBwdXQsIGludGVy
-YWN0aXZlIHByb21wdCBvbmx5KToKIyAgIERJR0VTVF9XRUJIT09LX1VSTCAgICAgICB0aGUgZGVk
-aWNhdGVkICNtb3JuaW5nLWRpZ2VzdCBEaXNjb3JkIHdlYmhvb2sKIyAgIERJR0VTVF9SVU5fVE9L
-RU4gICAgICAgICBiZWFyZXIgdG9rZW4gZm9yIFBPU1QgL2RpZ2VzdC9ydW4KIyAgIEhBX0RJR0VT
-VF9XRUJIT09LX1VSTCAgICBIb21lIEFzc2lzdGFudCB3ZWJob29rIFVSTCBmb3Igc3Bva2VuIGRp
-Z2VzdCBoYW5kb2ZmCiMgICBOT1RJRllfVE9LRU4gICAgICAgICAgICAgZm9yIHRoZSBiZXN0LWVm
-Zm9ydCBmYWlsdXJlIGVudmVsb3BlIHRvIGF0bGFzLW5vdGlmeQojICAgQ0ZfQUNDRVNTX0NMSUVO
-VF9JRCAgICAgIEFjY2VzcyBzZXJ2aWNlIHRva2VuIGlkIGZvciB0aGUgT2xsYW1hIHR1bm5lbCBo
-b3N0bmFtZQojICAgQ0ZfQUNDRVNTX0NMSUVOVF9TRUNSRVQgIEFjY2VzcyBzZXJ2aWNlIHRva2Vu
-IHNlY3JldAoKbmFtZSA9ICJhdGxhcy1kYWlseS1kaWdlc3QiCm1haW4gPSAic3JjL2luZGV4Lmpz
-Igpjb21wYXRpYmlsaXR5X2RhdGUgPSAiMjAyNi0wNy0xMiIKCiMgUm91dGUgY2xhaW1zIG1vcmUg
-c3BlY2lmaWMgdGhhbiBhdGxhcy1ub3RpZnkncyAvKiB3aWxkY2FyZCwgcGVyIHRoZQojIGVzdGF0
-ZSdzIG1vc3Qtc3BlY2lmaWMtZmlyc3QgbGF5ZXJpbmcgcnVsZS4gem9uZV9pZCBsaXRlcmFsLCBu
-ZXZlcgojIHpvbmVfbmFtZTogc2NvcGVkIENJIHRva2VucyBjYW5ub3QgcGVyZm9ybSB6b25lIG1l
-bWJlcnNoaXAgbG9va3Vwcy4Kcm91dGVzID0gWwogIHsgcGF0dGVybiA9ICJhcGkuYXRsYXMtc3lz
-dGVtcy51ay9kaWdlc3QiLCB6b25lX2lkID0gIjhiYTYzNTBhNzhjOTg4NDQ3YzExMTA0OGIxMjVm
-OTE3IiB9LAogIHsgcGF0dGVybiA9ICJhcGkuYXRsYXMtc3lzdGVtcy51ay9kaWdlc3QvKiIsIHpv
-bmVfaWQgPSAiOGJhNjM1MGE3OGM5ODg0NDdjMTExMDQ4YjEyNWY5MTciIH0sCl0KCiMgMTI6MDAg
-VVRDIGRhaWx5LiBDcm9uIHRyaWdnZXJzIGFyZSBhbHdheXMgVVRDOyBkdXJpbmcgQlNUIHRoaXMg
-cG9zdHMKIyBhdCAxMzowMCBsb2NhbC4gRWRpdCB0aGlzIG9uZSBsaW5lIHRvIGNoYW5nZSB0aGUg
-c2VuZCB0aW1lLgpbdHJpZ2dlcnNdCmNyb25zID0gWyIwIDEyICogKiAqIl0KClt2YXJzXQojIFRo
-ZSBBY2Nlc3MtZ2F0ZWQgdHVubmVsIGhvc3RuYW1lIGluIGZyb250IG9mIHRoZSByYXcgT2xsYW1h
-IG9uCiMgU1BFQ1VMQVItQ09SRSAocG9ydCAxMTQzNCkuIFNlZSBSRUFETUUsICJUaGUgT2xsYW1h
-IGhvcCIuCk9MTEFNQV9VUkwgPSAiaHR0cHM6Ly9vbGxhbWEtdHVubmVsLmF0bGFzLXN5c3RlbXMu
-dWsiCiMgbGxhbWEzLjE6OGIgaXMgcGVybWFuZW50bHkgYmxvY2tlZCBmb3IgZXZpZGVuY2Utc2Vu
-c2l0aXZlIHJlYXNvbmluZwojIChNT0RFTC1QT0xJQ1kubWQ6IGZhYnJpY2F0aW9uIHJlZ3Jlc3Np
-b24sIHBlcm1hbmVudCBjYXNlIGluCiMgYXRsYXMtZXZhbC1oYXJuZXNzKS4gcXdlbjM6MTRiIGlz
-IHRoZSBlc3RhdGUncyBhcHByb3ZlZCBtb2RlbCBmb3IgdGhpcwojIGNsYXNzIG9mIHRhc2sgYW5k
-IGFscmVhZHkgcnVucyBvbiBTUEVDVUxBUi1DT1JFIGF0IGxvdyBsYXRlbmN5LgpPTExBTUFfTU9E
-RUwgPSAicXdlbjM6MTRiIgoKW29ic2VydmFiaWxpdHldCmVuYWJsZWQgPSB0cnVlCmhlYWRfc2Ft
-cGxpbmdfcmF0ZSA9IDEKCltbc2VydmljZXNdXQpiaW5kaW5nID0gIkFUTEFTX05PVElGWSIKc2Vy
-dmljZSA9ICJhdGxhcy1ub3RpZnkiCg==
+# atlas-daily-digest
+#
+# Secrets (wrangler secret put, interactive prompt only):
+#   DIGEST_WEBHOOK_URL       the dedicated #morning-digest Discord webhook
+#   DIGEST_RUN_TOKEN         bearer token for POST /digest/run
+#   HA_DIGEST_WEBHOOK_URL    Home Assistant webhook URL for spoken digest handoff
+#   NOTIFY_TOKEN             for the best-effort failure envelope to atlas-notify
+#   CF_ACCESS_CLIENT_ID      Access service token id for the Ollama tunnel hostname
+#   CF_ACCESS_CLIENT_SECRET  Access service token secret
+
+name = "atlas-daily-digest"
+main = "src/index.js"
+compatibility_date = "2026-07-12"
+
+# Route claims more specific than atlas-notify's /* wildcard, per the
+# estate's most-specific-first layering rule. zone_id literal, never
+# zone_name: scoped CI tokens cannot perform zone membership lookups.
+routes = [
+  { pattern = "api.atlas-systems.uk/digest", zone_id = "8ba6350a78c988447c111048b125f917" },
+  { pattern = "api.atlas-systems.uk/digest/*", zone_id = "8ba6350a78c988447c111048b125f917" },
+]
+
+# 12:00 UTC daily. Cron triggers are always UTC; during BST this posts
+# at 13:00 local. Edit this one line to change the send time.
+[triggers]
+crons = ["0 12 * * *"]
+
+[vars]
+# The Access-gated tunnel hostname in front of the raw Ollama on
+# SPECULAR-CORE (port 11434). See README, "The Ollama hop".
+OLLAMA_URL = "https://ollama-tunnel.atlas-systems.uk"
+# llama3.1:8b is blocked for evidence-sensitive synthesis by Atlas model
+# policy. qwen3:14b is the approved local Ollama model for this digest class.
+OLLAMA_MODEL = "qwen3:14b"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[[services]]
+binding = "ATLAS_NOTIFY"
+service = "atlas-notify"
