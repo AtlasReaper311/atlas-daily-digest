@@ -69,7 +69,7 @@ All under `api.atlas-systems.uk/digest`:
 
 The Worker runs at the edge; the model runs in the room. The bridge is a dedicated tunnel hostname (`ollama-tunnel.atlas-systems.uk` to `localhost:11434` on the existing cloudflared instance) protected by a Cloudflare Access application with a Service Auth policy. Raw Ollama has no authentication of its own, so unlike [`ramone-edge`](https://github.com/AtlasReaper311/ramone-edge)'s `X-Atlas-Secret` (which the origin FastAPI verifies), the gate here has to live at the edge: Access rejects any request that does not carry this Worker's service token headers before the tunnel ever sees it. Optional hardening is JWT validation in the cloudflared config, noted here and deliberately not required for this threat model.
 
-`OLLAMA_MODEL` is `qwen3:14b`, the local Ollama model approved for this evidence-sensitive digest class after the llama3.1:8b fabrication regression. The request allows 120 seconds: at noon the model may still be cold, and the budget covers an NVMe load plus generation. `keep_alive` is ten minutes; the daily digest is not a reason to pin VRAM all day.
+`OLLAMA_MODEL` is `qwen3:14b`, the local Ollama model approved for this evidence-sensitive digest class after the llama3.1:8b fabrication regression. The chat request sets `think: false`: qwen3 otherwise spends the whole `num_predict` budget on a thinking trace and returns an empty spoken paragraph. The request allows 120 seconds: at noon the model may still be cold, and the budget covers an NVMe load plus generation. `keep_alive` is ten minutes; the daily digest is not a reason to pin VRAM all day.
 
 ## The spoken hop
 

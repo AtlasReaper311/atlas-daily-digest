@@ -85,7 +85,7 @@ const META = {
   name: "atlas-daily-digest",
   description:
     "Yesterday on the estate as one spoken paragraph, posted every morning in Ramone's voice",
-  version: "1.1.0",
+  version: "1.1.1",
   endpoints: [
     {
       method: "GET",
@@ -348,6 +348,9 @@ async function synthesise(env, day, events) {
     body: JSON.stringify({
       model: env.OLLAMA_MODEL,
       stream: false,
+      // qwen3 spends the whole num_predict budget on `thinking` unless
+      // this is off, and then message.content is empty.
+      think: false,
       keep_alive: "10m",
       options: { temperature: 0.4, num_predict: 220, num_ctx: 4096 },
       messages: [
@@ -360,11 +363,24 @@ async function synthesise(env, day, events) {
   if (!res.ok) throw new Error(`Ollama answered HTTP ${res.status}`);
 
   const body = await res.json();
-  const raw =
-    typeof body?.message?.content === "string" ? body.message.content : "";
-  const text = tidy(raw);
-  if (!text) throw new Error("Ollama returned an empty message");
+  const text = extractOllamaText(body);
+  if (!text) {
+    throw new Error(
+      "Ollama returned an empty message (content was blank after thinking)",
+    );
+  }
   return text;
+}
+
+/**
+ * qwen3 puts reasoning in message.thinking and can leave content empty.
+ * Never speak the thinking trace; only the visible reply counts.
+ */
+function extractOllamaText(body) {
+  const msg = body?.message || {};
+  const content = typeof msg.content === "string" ? msg.content : "";
+  const stripped = content.replace(/<think>[\s\S]*?<\/think>/gi, "");
+  return tidy(stripped);
 }
 
 /**
