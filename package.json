@@ -10,7 +10,7 @@
     "dry-run": "wrangler deploy --dry-run --outdir dist"
   },
   "devDependencies": {
-    "eslint": "^10.8.1",
-    "wrangler": "^4.120.0"
+    "eslint": "^10.9.1",
+    "wrangler": "^4.127.0"
   }
 }
