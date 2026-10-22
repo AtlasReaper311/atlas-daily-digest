@@ -245,7 +245,7 @@ async function failDigest(env, day, stage, reason) {
 async function emitFailureEvent(env, day, stage, reason) {
   if (!env.NOTIFY_TOKEN || !env.ATLAS_NOTIFY) return;
   try {
-    await env.ATLAS_NOTIFY.fetch("https://atlas-notify/notify", {
+    const response = await env.ATLAS_NOTIFY.fetch("https://atlas-notify/notify", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -259,6 +259,11 @@ async function emitFailureEvent(env, day, stage, reason) {
       }),
       signal: AbortSignal.timeout(10_000),
     });
+    if (!response.ok) {
+      console.error(
+        `digest ${day}: notify envelope answered HTTP ${response.status}`,
+      );
+    }
   } catch (err) {
     console.error(`digest ${day}: notify envelope failed: ${describe(err)}`);
   }

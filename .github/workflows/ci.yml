@@ -31,5 +31,6 @@ jobs:
       - name: Run offline validation
         run: |
           npm run check
+          npm test
           npm run lint
           npm run dry-run

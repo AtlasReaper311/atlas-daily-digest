@@ -43,7 +43,7 @@ cron 12:00 UTC ─▶ atlas-daily-digest (this worker)
 
 ## How the morning run works
 
-At 12:00 UTC the cron pulls the last 50 ring-buffer entries over the service binding (the estate's banked rule: same-zone Worker-to-Worker calls over the public hostname 522) and filters them to the previous UTC calendar day. The filtered list becomes a compact, timestamped event report; Ramone's system prompt turns it into a short first-person paragraph; the paragraph posts as a single amber embed and is then sent to Home Assistant for TTS.
+At 12:00 UTC the cron requests up to 200 recent entries over the service binding (the estate's banked rule: same-zone Worker-to-Worker calls over the public hostname 522), then filters them to the previous UTC calendar day. The feed is bounded, so if its oldest returned event is still inside yesterday, the digest marks the result as incomplete and treats counts as minimums. The filtered list becomes a compact, timestamped event report; Ramone's system prompt turns it into a short first-person paragraph; the paragraph posts as a single amber embed and is then sent to Home Assistant for TTS.
 
 Three coverage cases are handled explicitly, because the ring buffer holds 200 entries and the read endpoint pages at 50:
 
@@ -63,7 +63,7 @@ All under `api.atlas-systems.uk/digest`:
 | POST | `/digest/run` | Run the digest now; `Bearer DIGEST_RUN_TOKEN`, optional `?date=YYYY-MM-DD` backfill |
 | GET | `/digest/_meta` | The estate self-description contract |
 
-`/digest/run` executes the exact pipeline the cron does, so one successful manual run is proof the scheduled one will work.
+`/digest/run` exercises the same event-fetch, model, and delivery pipeline as the cron. It does not prove that a future cron fires or that a local dependency will remain available.
 
 ## The Ollama hop
 
