@@ -45,7 +45,7 @@ cron 12:00 UTC ─▶ atlas-daily-digest (this worker)
 
 At 12:00 UTC the cron requests up to 200 recent entries over the service binding (the estate's banked rule: same-zone Worker-to-Worker calls over the public hostname 522), then filters them to the previous UTC calendar day. The feed is bounded, so if its oldest returned event is still inside yesterday, the digest marks the result as incomplete and treats counts as minimums. The filtered list becomes a compact, timestamped event report; Ramone's system prompt turns it into a short first-person paragraph; the paragraph posts as a single amber embed and is then sent to Home Assistant for TTS.
 
-Three coverage cases are handled explicitly, because the ring buffer holds 200 entries and the read endpoint pages at 50:
+Three coverage cases are handled explicitly. atlas-notify retains up to 500 summaries per UTC-day key and reads across a bounded eight-day window; this Worker requests at most 200 events for a digest:
 
 - Events found: normal digest, oldest-first, grouped and counted.
 - No events, feed reaches past the day boundary: a genuinely quiet day, reported calmly in two or three sentences.
