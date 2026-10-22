@@ -4,7 +4,9 @@ import worker from "../src/index.js";
 
 const originalFetch = globalThis.fetch;
 const originalConsoleError = console.error;
+const originalAbortSignalTimeout = AbortSignal.timeout;
 let logs;
+let timeoutDurations;
 
 function makeEnv(notifyStatus) {
   const notifyCalls = [];
@@ -37,6 +39,11 @@ async function runScheduled(env) {
 
 beforeEach(() => {
   logs = [];
+  timeoutDurations = [];
+  AbortSignal.timeout = (duration) => {
+    timeoutDurations.push(duration);
+    return originalAbortSignalTimeout(duration);
+  };
   console.error = (...parts) => logs.push(parts.join(" "));
   globalThis.fetch = async (input) => {
     const url = new URL(typeof input === "string" ? input : input.url);
@@ -53,6 +60,7 @@ beforeEach(() => {
 afterEach(() => {
   globalThis.fetch = originalFetch;
   console.error = originalConsoleError;
+  AbortSignal.timeout = originalAbortSignalTimeout;
 });
 
 test("logs when Atlas Notify rejects a digest failure event", async () => {
@@ -68,3 +76,23 @@ test("does not report an error when Atlas Notify accepts a digest failure event"
   assert.ok(notifyCalls.some((call) => call.method === "POST"));
   assert.ok(!logs.some((line) => line.includes("notify envelope answered HTTP")));
 });
+
+test("gives one Ollama request a bounded three-minute timeout", async () => {
+  const { env } = makeEnv(200);
+  globalThis.fetch = async (input) => {
+    const url = new URL(typeof input === "string" ? input : input.url);
+    if (url.hostname === "ollama.invalid") {
+      return Response.json({ message: { content: "A quiet day." } });
+    }
+    if (url.hostname === "discord.invalid") {
+      return new Response(null, { status: 204 });
+    }
+    throw new Error("unexpected outbound host");
+  };
+
+  await runScheduled(env);
+
+  assert.ok(timeoutDurations.includes(180_000));
+  assert.ok(!timeoutDurations.includes(120_000));
+});
+
