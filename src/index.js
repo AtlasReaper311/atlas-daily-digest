@@ -67,6 +67,11 @@ const LINE_MAX = 220;
 // being a digest.
 const DIGEST_MAX = 1500;
 
+// Allow one additional minute after evidence showed the current two-minute
+// request can expire during a cold model load and generation. Still one
+// bounded attempt; this does not change which model runs.
+const OLLAMA_TIMEOUT_MS = 180_000;
+
 // The synthesis prompt. Documented verbatim in README.md; if one
 // changes, the other must change in the same commit.
 const SYSTEM_PROMPT = `You are Ramone, the voice of Atlas Systems: a local AI assistant that watches over a small estate of services, Workers, and pipelines. Each morning you write a short digest of what happened on the estate yesterday.
@@ -245,7 +250,7 @@ async function failDigest(env, day, stage, reason) {
 async function emitFailureEvent(env, day, stage, reason) {
   if (!env.NOTIFY_TOKEN || !env.ATLAS_NOTIFY) return;
   try {
-    await env.ATLAS_NOTIFY.fetch("https://atlas-notify/notify", {
+    const response = await env.ATLAS_NOTIFY.fetch("https://atlas-notify/notify", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -259,6 +264,11 @@ async function emitFailureEvent(env, day, stage, reason) {
       }),
       signal: AbortSignal.timeout(10_000),
     });
+    if (!response.ok) {
+      console.error(
+        `digest ${day}: notify envelope answered HTTP ${response.status}`,
+      );
+    }
   } catch (err) {
     console.error(`digest ${day}: notify envelope failed: ${describe(err)}`);
   }
@@ -339,9 +349,9 @@ async function synthesise(env, day, events) {
     headers["CF-Access-Client-Secret"] = env.CF_ACCESS_CLIENT_SECRET;
   }
 
-  // 120s covers a cold model load from NVMe at noon plus generation.
-  // Single attempt on purpose: a retry after a timeout would double the
-  // wait without changing the outcome, and the fallback path is cheap.
+  // Keep the cold-load and generation budget bounded. Single attempt on
+  // purpose: a retry after a timeout would double the wait without
+  // changing the outcome, and the fallback path is cheap.
   const res = await fetch(`${env.OLLAMA_URL}/api/chat`, {
     method: "POST",
     headers,
@@ -358,7 +368,7 @@ async function synthesise(env, day, events) {
         { role: "user", content: buildEventReport(day, events) },
       ],
     }),
-    signal: AbortSignal.timeout(120_000),
+    signal: AbortSignal.timeout(OLLAMA_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`Ollama answered HTTP ${res.status}`);
 
@@ -585,3 +595,4 @@ function json(status, body) {
     headers: { "content-type": "application/json" },
   });
 }
+

@@ -43,9 +43,9 @@ cron 12:00 UTC ─▶ atlas-daily-digest (this worker)
 
 ## How the morning run works
 
-At 12:00 UTC the cron pulls the last 50 ring-buffer entries over the service binding (the estate's banked rule: same-zone Worker-to-Worker calls over the public hostname 522) and filters them to the previous UTC calendar day. The filtered list becomes a compact, timestamped event report; Ramone's system prompt turns it into a short first-person paragraph; the paragraph posts as a single amber embed and is then sent to Home Assistant for TTS.
+At 12:00 UTC the cron requests up to 200 recent entries over the service binding (the estate's banked rule: same-zone Worker-to-Worker calls over the public hostname 522), then filters them to the previous UTC calendar day. The feed is bounded, so if its oldest returned event is still inside yesterday, the digest marks the result as incomplete and treats counts as minimums. The filtered list becomes a compact, timestamped event report; Ramone's system prompt turns it into a short first-person paragraph; the paragraph posts as a single amber embed and is then sent to Home Assistant for TTS.
 
-Three coverage cases are handled explicitly, because the ring buffer holds 200 entries and the read endpoint pages at 50:
+Three coverage cases are handled explicitly. atlas-notify retains up to 500 summaries per UTC-day key and reads across a bounded eight-day window; this Worker requests at most 200 events for a digest:
 
 - Events found: normal digest, oldest-first, grouped and counted.
 - No events, feed reaches past the day boundary: a genuinely quiet day, reported calmly in two or three sentences.
@@ -63,13 +63,13 @@ All under `api.atlas-systems.uk/digest`:
 | POST | `/digest/run` | Run the digest now; `Bearer DIGEST_RUN_TOKEN`, optional `?date=YYYY-MM-DD` backfill |
 | GET | `/digest/_meta` | The estate self-description contract |
 
-`/digest/run` executes the exact pipeline the cron does, so one successful manual run is proof the scheduled one will work.
+`/digest/run` exercises the same event-fetch, model, and delivery pipeline as the cron. It does not prove that a future cron fires or that a local dependency will remain available.
 
 ## The Ollama hop
 
 The Worker runs at the edge; the model runs in the room. The bridge is a dedicated tunnel hostname (`ollama-tunnel.atlas-systems.uk` to `localhost:11434` on the existing cloudflared instance) protected by a Cloudflare Access application with a Service Auth policy. Raw Ollama has no authentication of its own, so unlike [`ramone-edge`](https://github.com/AtlasReaper311/ramone-edge)'s `X-Atlas-Secret` (which the origin FastAPI verifies), the gate here has to live at the edge: Access rejects any request that does not carry this Worker's service token headers before the tunnel ever sees it. Optional hardening is JWT validation in the cloudflared config, noted here and deliberately not required for this threat model.
 
-`OLLAMA_MODEL` is `qwen3:14b`, the local Ollama model approved for this evidence-sensitive digest class after the llama3.1:8b fabrication regression. The chat request sets `think: false`: qwen3 otherwise spends the whole `num_predict` budget on a thinking trace and returns an empty spoken paragraph. The request allows 120 seconds: at noon the model may still be cold, and the budget covers an NVMe load plus generation. `keep_alive` is ten minutes; the daily digest is not a reason to pin VRAM all day.
+`OLLAMA_MODEL` is `qwen3:14b`, the local Ollama model approved for this evidence-sensitive digest class after the llama3.1:8b fabrication regression. The chat request sets `think: false`: qwen3 otherwise spends the whole `num_predict` budget on a thinking trace and returns an empty spoken paragraph. The request has a bounded 180-second timeout. This gives a cold model load and generation one extra minute beyond the previous limit; it is a mitigation, not a guarantee that every scheduled run will finish. `keep_alive` is ten minutes; the daily digest is not a reason to pin VRAM all day.
 
 ## The spoken hop
 
