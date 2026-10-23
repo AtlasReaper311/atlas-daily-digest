@@ -357,7 +357,7 @@ async function synthesise(env, day, events) {
     headers,
     body: JSON.stringify({
       model: env.OLLAMA_MODEL,
-      stream: false,
+      stream: true,
       // qwen3 spends the whole num_predict budget on `thinking` unless
       // this is off, and then message.content is empty.
       think: false,
@@ -372,14 +372,86 @@ async function synthesise(env, day, events) {
   });
   if (!res.ok) throw new Error(`Ollama answered HTTP ${res.status}`);
 
-  const body = await res.json();
-  const text = extractOllamaText(body);
+  const text = extractOllamaText({
+    message: { content: await readOllamaStream(res.body) },
+  });
   if (!text) {
     throw new Error(
       "Ollama returned an empty message (content was blank after thinking)",
     );
   }
   return text;
+}
+
+/**
+ * Ollama streams one newline-delimited JSON object at a time. Reading
+ * those chunks lets the tunnel return response headers before generation
+ * finishes, while the final done marker prevents speaking a partial reply.
+ */
+async function readOllamaStream(body) {
+  if (!body) throw new Error("Ollama returned an empty stream");
+
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = "";
+  let content = "";
+  let completed = false;
+  let streamEnded = false;
+
+  const consumeLine = (line) => {
+    if (!line.trim()) return;
+
+    let chunk;
+    try {
+      chunk = JSON.parse(line);
+    } catch {
+      throw new Error("Ollama returned invalid streaming JSON");
+    }
+
+    if (typeof chunk?.error === "string") {
+      throw new Error("Ollama returned an error while streaming");
+    }
+    if (typeof chunk?.message?.content === "string") {
+      content += chunk.message.content;
+    }
+    if (chunk?.done === true) completed = true;
+  };
+
+  try {
+    while (!completed) {
+      const result = await reader.read();
+      if (result.done) {
+        streamEnded = true;
+        buffered += decoder.decode();
+        break;
+      }
+
+      buffered += decoder.decode(result.value, { stream: true });
+      const lines = buffered.split(/\r?\n/);
+      buffered = lines.pop() || "";
+
+      for (const line of lines) {
+        consumeLine(line);
+        if (completed) break;
+      }
+    }
+
+    if (!completed && buffered.trim()) consumeLine(buffered);
+  } finally {
+    if (!streamEnded) {
+      try {
+        await reader.cancel();
+      } catch {
+        // Keep the original parsing or stream error.
+      }
+    }
+    reader.releaseLock();
+  }
+
+  if (!completed) {
+    throw new Error("Ollama stream ended before completion");
+  }
+  return content;
 }
 
 /**
