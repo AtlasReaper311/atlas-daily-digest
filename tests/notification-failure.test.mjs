@@ -4,12 +4,17 @@ import worker from "../src/index.js";
 
 const originalFetch = globalThis.fetch;
 const originalConsoleError = console.error;
+const originalConsoleWarn = console.warn;
 const originalAbortSignalTimeout = AbortSignal.timeout;
+const originalSetTimeout = globalThis.setTimeout;
 let logs;
 let timeoutDurations;
+let retryDelays;
 
-function makeEnv(notifyStatus) {
+function makeEnv(notifyStatus, recentResults = []) {
   const notifyCalls = [];
+  const recentCalls = [];
+  const pendingRecentResults = [...recentResults];
   const env = {
     DIGEST_WEBHOOK_URL: "https://discord.invalid/digest",
     NOTIFY_TOKEN: "test-notify-token",
@@ -21,13 +26,19 @@ function makeEnv(notifyStatus) {
         const method = init.method ?? "GET";
         notifyCalls.push({ path: url.pathname, method });
         if (url.pathname.endsWith("/recent")) {
+          recentCalls.push(url.searchParams.get("limit"));
+          if (pendingRecentResults.length > 0) {
+            const result = pendingRecentResults.shift();
+            if (result instanceof Error) throw result;
+            return result;
+          }
           return Response.json({ events: [] });
         }
         return new Response(null, { status: notifyStatus });
       },
     },
   };
-  return { env, notifyCalls };
+  return { env, notifyCalls, recentCalls };
 }
 
 async function runScheduled(env) {
@@ -40,11 +51,17 @@ async function runScheduled(env) {
 beforeEach(() => {
   logs = [];
   timeoutDurations = [];
+  retryDelays = [];
   AbortSignal.timeout = (duration) => {
     timeoutDurations.push(duration);
     return originalAbortSignalTimeout(duration);
   };
+  globalThis.setTimeout = (callback, delay, ...args) => {
+    retryDelays.push(delay);
+    return originalSetTimeout(callback, 0, ...args);
+  };
   console.error = (...parts) => logs.push(parts.join(" "));
+  console.warn = (...parts) => logs.push(parts.join(" "));
   globalThis.fetch = async (input) => {
     const url = new URL(typeof input === "string" ? input : input.url);
     if (url.hostname === "ollama.invalid") {
@@ -60,7 +77,70 @@ beforeEach(() => {
 afterEach(() => {
   globalThis.fetch = originalFetch;
   console.error = originalConsoleError;
+  console.warn = originalConsoleWarn;
   AbortSignal.timeout = originalAbortSignalTimeout;
+  globalThis.setTimeout = originalSetTimeout;
+});
+
+test("recovers when the Notify feed times out twice and succeeds on the third try", async () => {
+  const { env, recentCalls } = makeEnv(200, [
+    new Error("simulated Notify timeout"),
+    new Error("simulated Notify timeout"),
+  ]);
+  let postedDigest;
+
+  globalThis.fetch = async (input, init = {}) => {
+    const url = new URL(typeof input === "string" ? input : input.url);
+    if (url.hostname === "ollama.invalid") {
+      const body = [
+        JSON.stringify({ message: { content: "A quiet day." }, done: false }),
+        JSON.stringify({ message: { content: "" }, done: true }),
+        "",
+      ].join("\n");
+      return new Response(body, {
+        headers: { "content-type": "application/x-ndjson" },
+      });
+    }
+    if (url.hostname === "discord.invalid") {
+      postedDigest = JSON.parse(init.body);
+      return new Response(null, { status: 204 });
+    }
+    throw new Error("unexpected outbound host");
+  };
+
+  await runScheduled(env);
+
+  assert.deepEqual(recentCalls, ["200", "200", "200"]);
+  assert.deepEqual(retryDelays, [1500, 3000]);
+  assert.equal(postedDigest.embeds[0].description, "A quiet day.");
+});
+
+test("reports the failure honestly after all three Notify feed attempts time out", async () => {
+  const { env, recentCalls } = makeEnv(200, [
+    new Error("simulated Notify timeout"),
+    new Error("simulated Notify timeout"),
+    new Error("simulated Notify timeout"),
+  ]);
+  let postedNotice;
+
+  globalThis.fetch = async (input, init = {}) => {
+    const url = new URL(typeof input === "string" ? input : input.url);
+    if (url.hostname === "discord.invalid") {
+      postedNotice = JSON.parse(init.body);
+      return new Response(null, { status: 204 });
+    }
+    throw new Error("unexpected outbound host");
+  };
+
+  await runScheduled(env);
+
+  assert.deepEqual(recentCalls, ["200", "200", "200"]);
+  assert.deepEqual(retryDelays, [1500, 3000]);
+  assert.match(postedNotice.embeds[0].title, /not written/);
+  assert.match(
+    postedNotice.embeds[0].description,
+    /atlas-notify \/notify\/recent was unreachable \(simulated Notify timeout\)/,
+  );
 });
 
 test("logs when Atlas Notify rejects a digest failure event", async () => {

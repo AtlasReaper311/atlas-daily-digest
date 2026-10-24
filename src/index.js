@@ -616,15 +616,25 @@ async function postWebhook(env, payload) {
 /* Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
+/** Retry a safe read twice after a timeout or server error, with short waits. */
 async function fetchWithRetry(doFetch) {
-  try {
-    const first = await doFetch();
-    if (first.status < 500) return first;
-  } catch (err) {
-    console.warn(`fetch attempt one failed: ${describe(err)}`);
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const response = await doFetch();
+      if (response.status < 500 || attempt === 3) return response;
+      console.warn(
+        `fetch attempt ${attempt} answered HTTP ${response.status}; retrying`,
+      );
+    } catch (err) {
+      lastError = err;
+      console.warn(`fetch attempt ${attempt} failed: ${describe(err)}`);
+      if (attempt === 3) throw err;
+    }
+    await sleep(attempt * 1500);
   }
-  await sleep(1500);
-  return doFetch();
+
+  throw lastError ?? new Error("fetch retry loop ended without a response");
 }
 
 function bearerToken(request) {
